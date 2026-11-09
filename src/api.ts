@@ -8,6 +8,7 @@ export const backend = {
   saveTask: (task: Task) => invoke<Task>("save_task", { input: task }),
   completeTask: (id: string, done: boolean) =>
     invoke<Task>("complete_task", { id, done }),
+  deleteTask: (id: string) => invoke<number>("delete_task", { id }),
   sync: () => invoke<SyncResult>("sync_now"),
   connect: (token: string, settings: Settings) =>
     invoke<AppStatus>("connect_notion", { input: { token, settings } }),

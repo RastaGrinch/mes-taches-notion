@@ -21,6 +21,8 @@ Le backend Rust gère :
 5. Les pages distantes sont ensuite relues et fusionnées dans le cache local.
 6. En cas d’erreur réseau, la tâche reste dans la file locale avec le détail de l’erreur.
 
+La suppression suit le même principe hors connexion. La tâche disparaît immédiatement du cache visible. Si elle existait déjà dans Notion, son identifiant est conservé dans une file de suppressions, puis la page est placée dans la corbeille Notion à la prochaine synchronisation. Une suppression qui échoue reste en attente sans faire réapparaître la tâche dans l’application.
+
 ## Données locales
 
 - **SQLite** : tâches, paramètres non sensibles et état de synchronisation.
@@ -34,4 +36,3 @@ Le client utilise la version `2026-03-11` de l’API et les endpoints `data_sour
 ## Absence de serveur intermédiaire
 
 L’application communique directement avec Notion depuis l’ordinateur. Il n’existe pas de backend hébergé, de compte propre à l’application ni de télémétrie.
-

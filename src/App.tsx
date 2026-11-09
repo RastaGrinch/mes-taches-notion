@@ -13,6 +13,7 @@ import {
   Settings as SettingsIcon,
   Star,
   Sun,
+  Trash2,
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
@@ -69,6 +70,8 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<Task | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [themePreferences, setThemePreferences] = useState(loadThemePreferences);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,6 +153,24 @@ export default function App() {
   function updateLocal(task: Task) {
     setTasks((current) => current.map((item) => item.id === task.id ? task : item));
     setSelected((current) => current?.id === task.id ? task : current);
+  }
+
+  async function handleDelete() {
+    if (!deleteCandidate || deleting || syncing) return;
+    const task = deleteCandidate;
+    setDeleting(true);
+    try {
+      const pendingCount = await backend.deleteTask(task.id);
+      setTasks((current) => current.filter((item) => item.id !== task.id));
+      setSelected((current) => current?.id === task.id ? null : current);
+      setStatus((current) => current ? { ...current, pendingCount } : current);
+      setDeleteCandidate(null);
+      if (status?.configured) void handleSync();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function handleSync() {
@@ -262,7 +283,8 @@ export default function App() {
         </section>
       </main>
 
-      {selected && <DetailPanel task={selected} onClose={() => setSelected(null)} onSave={handleSave} onComplete={handleComplete} />}
+      {selected && <DetailPanel task={selected} onClose={() => setSelected(null)} onSave={handleSave} onComplete={handleComplete} onDelete={() => setDeleteCandidate(selected)} deleteDisabled={syncing} />}
+      {deleteCandidate && <DeleteDialog task={deleteCandidate} busy={deleting} syncInProgress={syncing} onCancel={() => !deleting && setDeleteCandidate(null)} onConfirm={() => void handleDelete()} />}
       {themeOpen && <ThemePanel activeTheme={currentTheme} onChoose={chooseTheme} onClose={() => setThemeOpen(false)} />}
       {settingsOpen && <SettingsPanel status={status} onClose={() => setSettingsOpen(false)} onSaved={async () => { setSettingsOpen(false); await load(); }} />}
     </div>
@@ -326,7 +348,7 @@ function TaskRow({ task, onComplete, onSelect, onSave }: { task: Task; onComplet
   );
 }
 
-function DetailPanel({ task, onClose, onSave, onComplete }: { task: Task; onClose: () => void; onSave: (task: Task) => void; onComplete: (task: Task, done: boolean) => void }) {
+function DetailPanel({ task, onClose, onSave, onComplete, onDelete, deleteDisabled }: { task: Task; onClose: () => void; onSave: (task: Task) => void; onComplete: (task: Task, done: boolean) => void; onDelete: () => void; deleteDisabled: boolean }) {
   const [draft, setDraft] = useState(task);
   useEffect(() => setDraft(task), [task]);
   const update = <K extends keyof Task>(key: K, value: Task[K]) => setDraft((current) => ({ ...current, [key]: value }));
@@ -355,8 +377,36 @@ function DetailPanel({ task, onClose, onSave, onComplete }: { task: Task; onClos
         <Field label="Description"><textarea value={draft.description} onChange={(event) => update("description", event.target.value)} rows={5} placeholder="Ajouter des détails…" /></Field>
         <Field label="Commentaire"><textarea value={draft.comment} onChange={(event) => update("comment", event.target.value)} rows={4} /></Field>
       </div>
-      <div className="panel-footer">{draft.notionUrl && <a href={draft.notionUrl} target="_blank" rel="noreferrer">Ouvrir dans Notion</a>}<button className="primary-button" onClick={saveAndClose}>Enregistrer</button></div>
+      <div className="panel-footer">
+        <div className="panel-footer-start">
+          <button className="danger-button delete-button" onClick={onDelete} disabled={deleteDisabled} title={deleteDisabled ? "Attends la fin de la synchronisation" : "Supprimer cette tâche"}><Trash2 size={16} />Supprimer</button>
+          {draft.notionUrl && <a href={draft.notionUrl} target="_blank" rel="noreferrer">Ouvrir dans Notion</a>}
+        </div>
+        <button className="primary-button" onClick={saveAndClose}>Enregistrer</button>
+      </div>
     </aside>
+  );
+}
+
+function DeleteDialog({ task, busy, syncInProgress, onCancel, onConfirm }: { task: Task; busy: boolean; syncInProgress: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+      <section className="confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">
+        <div className="confirm-body">
+          <span className="confirm-icon"><Trash2 size={24} /></span>
+          <div>
+            <h2 id="delete-title">Supprimer cette tâche ?</h2>
+            <p id="delete-description"><strong>{task.title}</strong> sera supprimée de l’application{task.notionId ? " et placée dans la corbeille Notion lors de la synchronisation" : ""}.</p>
+          </div>
+        </div>
+        <div className="modal-actions">
+          {syncInProgress && <small>Synchronisation en cours…</small>}
+          <span />
+          <button className="secondary-button" onClick={onCancel} disabled={busy}>Annuler</button>
+          <button className="danger-button confirm-danger" onClick={onConfirm} disabled={busy || syncInProgress}>{busy ? "Suppression…" : "Supprimer"}</button>
+        </div>
+      </section>
+    </div>
   );
 }
 

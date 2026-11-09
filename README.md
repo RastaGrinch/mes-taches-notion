@@ -11,6 +11,7 @@ L’application fonctionne d’abord en local : les tâches restent accessibles 
 - ajout immédiat d’une tâche avec la touche Entrée ;
 - vues **Ma journée**, **À faire**, **Importantes**, **Plus tard** et **Terminées** ;
 - modification du titre, de l’échéance, de la priorité, du statut, du responsable, de la source, de la description et du commentaire ;
+- suppression avec confirmation et mise à la corbeille de la page correspondante dans Notion ;
 - 8 couleurs, 8 dégradés et 15 illustrations fournies avec l’application ;
 - thème mémorisé localement et indépendamment pour chaque vue ;
 - cache SQLite et file de synchronisation persistante ;
@@ -44,6 +45,33 @@ L’application attend une base contenant des propriétés dont les noms et les 
 | `Type` | Sélection | Non |
 
 La procédure complète explique la création de la base, les options recommandées, la connexion Notion et la récupération de l’identifiant : **[Configurer Notion](docs/notion-setup.md)**.
+
+## Installer une version publiée
+
+Les installateurs sont disponibles dans la section [Releases](https://github.com/RastaGrinch/mes-taches-notion/releases).
+
+### macOS
+
+1. Télécharger et décompresser `Mes-taches-macOS.zip`.
+2. Déplacer **Mes tâches.app** dans le dossier **Applications**.
+3. Comme l’application n’est pas encore signée avec un certificat Apple public, ouvrir le Terminal et exécuter :
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Mes tâches.app"
+open "/Applications/Mes tâches.app"
+```
+
+Si macOS refuse la première commande pour un problème de droits, la relancer avec `sudo` :
+
+```bash
+sudo xattr -dr com.apple.quarantine "/Applications/Mes tâches.app"
+```
+
+Cette commande retire uniquement l’attribut de quarantaine ajouté au téléchargement de cette application.
+
+### Windows
+
+Télécharger `Mes-taches-Windows-x64-setup.exe`, lancer l’installateur, puis confirmer **Informations complémentaires → Exécuter quand même** si Microsoft Defender SmartScreen affiche un avertissement.
 
 ## Installation pour le développement
 
@@ -130,7 +158,7 @@ Une compilation croisée Windows depuis macOS est disponible avec `scripts/build
 
 ## État du projet
 
-Le projet est en version `0.1.0`. Les installateurs macOS et Windows ne sont pas encore signés par un certificat de distribution public : Gatekeeper ou SmartScreen peuvent afficher un avertissement lors du premier lancement.
+Le projet est en version `0.2.0`. Les installateurs macOS et Windows ne sont pas encore signés par un certificat de distribution public : Gatekeeper ou SmartScreen peuvent afficher un avertissement lors du premier lancement.
 
 ## Licence
 

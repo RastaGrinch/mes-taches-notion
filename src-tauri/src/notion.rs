@@ -21,7 +21,7 @@ pub struct RemoteWrite {
 impl NotionClient {
     pub fn new(token: String, settings: Settings) -> Result<Self, String> {
         let client = Client::builder()
-            .user_agent("notion-tasks-local/0.1")
+            .user_agent("notion-tasks-local/0.2")
             .build()
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -94,6 +94,19 @@ impl NotionClient {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         })
+    }
+
+    pub async fn delete(&self, page_id: &str) -> Result<(), String> {
+        let response = self
+            .request(
+                self.client
+                    .patch(format!("{NOTION_API}/pages/{}", clean_id(page_id))),
+            )
+            .json(&json!({ "in_trash": true }))
+            .send()
+            .await
+            .map_err(network_error)?;
+        ensure_success(response).await.map(|_| ())
     }
 
     pub async fn pull_all(&self) -> Result<Vec<(Task, Option<String>)>, String> {

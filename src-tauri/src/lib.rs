@@ -94,6 +94,12 @@ fn complete_task(id: String, done: bool, state: State<'_, AppState>) -> Result<T
 }
 
 #[tauri::command]
+fn delete_task(id: String, state: State<'_, AppState>) -> Result<usize, String> {
+    state.db.delete_local(&id)?;
+    state.db.pending_count()
+}
+
+#[tauri::command]
 fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<AppStatus, String> {
     state.db.save_settings(&settings)?;
     build_status(&state.db)
@@ -137,6 +143,18 @@ async fn sync_now(state: State<'_, AppState>) -> Result<SyncResult, String> {
     let dirty = state.db.dirty_tasks()?;
     let mut pushed = 0;
     let mut failed = 0;
+    for (task_id, notion_id) in state.db.pending_deletions()? {
+        match client.delete(&notion_id).await {
+            Ok(()) => {
+                state.db.mark_deletion_synced(&task_id)?;
+                pushed += 1;
+            }
+            Err(error) => {
+                state.db.mark_deletion_error(&task_id, &error)?;
+                failed += 1;
+            }
+        }
+    }
     for task in dirty {
         match client.push(&task).await {
             Ok(remote) => {
@@ -200,6 +218,7 @@ pub fn run() {
             create_task,
             save_task,
             complete_task,
+            delete_task,
             save_settings,
             connect_notion,
             disconnect_notion,

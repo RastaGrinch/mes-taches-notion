@@ -64,9 +64,17 @@ impl Database {
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS deletions (
+                task_id TEXT PRIMARY KEY,
+                notion_id TEXT NOT NULL UNIQUE,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_tasks_notion_id ON tasks(notion_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done);
-            CREATE INDEX IF NOT EXISTS idx_outbox_task ON outbox(task_id);",
+            CREATE INDEX IF NOT EXISTS idx_outbox_task ON outbox(task_id);
+            CREATE INDEX IF NOT EXISTS idx_deletions_notion_id ON deletions(notion_id);",
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -166,6 +174,67 @@ impl Database {
         transaction.commit().map_err(|error| error.to_string())
     }
 
+    pub fn delete_local(&self, task_id: &str) -> Result<(), String> {
+        let connection = self.connect()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        let notion_id: Option<Option<String>> = transaction
+            .query_row(
+                "SELECT notion_id FROM tasks WHERE id = ?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let notion_id = notion_id.ok_or_else(|| "La tâche est introuvable.".to_string())?;
+        if let Some(notion_id) = notion_id {
+            transaction
+                .execute(
+                    "INSERT INTO deletions(task_id, notion_id, created_at) VALUES(?1, ?2, ?3)
+                     ON CONFLICT(task_id) DO UPDATE SET notion_id = excluded.notion_id,
+                         attempts = 0, last_error = NULL",
+                    params![task_id, notion_id, chrono::Utc::now().to_rfc3339()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        transaction
+            .execute("DELETE FROM tasks WHERE id = ?1", [task_id])
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())
+    }
+
+    pub fn pending_deletions(&self) -> Result<Vec<(String, String)>, String> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare("SELECT task_id, notion_id FROM deletions ORDER BY created_at")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn mark_deletion_synced(&self, task_id: &str) -> Result<(), String> {
+        let connection = self.connect()?;
+        connection
+            .execute("DELETE FROM deletions WHERE task_id = ?1", [task_id])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn mark_deletion_error(&self, task_id: &str, message: &str) -> Result<(), String> {
+        let connection = self.connect()?;
+        connection
+            .execute(
+                "UPDATE deletions SET attempts = attempts + 1, last_error = ?2 WHERE task_id = ?1",
+                params![task_id, message],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn mark_synced(
         &self,
         local_id: &str,
@@ -213,6 +282,17 @@ impl Database {
         remote_edited_at: Option<&str>,
     ) -> Result<bool, String> {
         let connection = self.connect()?;
+        let pending_deletion = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM deletions WHERE notion_id = ?1)",
+                [task.notion_id.as_deref().unwrap_or_default()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())?
+            != 0;
+        if pending_deletion {
+            return Ok(false);
+        }
         let local: Option<(String, bool)> = connection
             .query_row(
                 "SELECT id, dirty FROM tasks WHERE notion_id = ?1",
@@ -235,9 +315,11 @@ impl Database {
     pub fn pending_count(&self) -> Result<usize, String> {
         let connection = self.connect()?;
         connection
-            .query_row("SELECT COUNT(*) FROM outbox", [], |row| {
-                row.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM deletions)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .map(|value| value as usize)
             .map_err(|error| error.to_string())
     }
@@ -350,5 +432,42 @@ mod tests {
         let saved = reopened.task(&task.id).expect("saved task");
         assert!(!saved.dirty);
         assert_eq!(saved.notion_id.as_deref(), Some("page-id"));
+    }
+
+    #[test]
+    fn deleting_a_local_only_task_removes_its_pending_upsert() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let db = Database::new(directory.path().join("tasks.sqlite")).expect("database");
+        let task = Task::new("Tâche locale".into(), &Settings::default());
+
+        db.insert_local(&task).expect("insert task");
+        db.delete_local(&task.id).expect("delete task");
+
+        assert!(db.list_tasks().expect("task list").is_empty());
+        assert!(db.pending_deletions().expect("deletions").is_empty());
+        assert_eq!(db.pending_count().expect("pending count"), 0);
+    }
+
+    #[test]
+    fn deleting_a_synced_task_waits_for_remote_deletion() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let db = Database::new(directory.path().join("tasks.sqlite")).expect("database");
+        let task = Task::new("Tâche synchronisée".into(), &Settings::default());
+
+        db.insert_local(&task).expect("insert task");
+        db.mark_synced(&task.id, "page-id", "https://notion.so/page-id", None)
+            .expect("mark synced");
+        db.delete_local(&task.id).expect("delete task");
+
+        assert!(db.list_tasks().expect("task list").is_empty());
+        assert_eq!(
+            db.pending_deletions().expect("deletions"),
+            vec![(task.id.clone(), "page-id".into())]
+        );
+        assert_eq!(db.pending_count().expect("pending count"), 1);
+
+        db.mark_deletion_synced(&task.id)
+            .expect("mark deletion synced");
+        assert_eq!(db.pending_count().expect("pending count"), 0);
     }
 }
