@@ -2,6 +2,12 @@
   "name": "notion-tasks-local",
   "private": true,
   "version": "0.1.0",
+  "description": "Gestionnaire de tâches local synchronisé avec Notion",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RastaGrinch/mes-taches-notion.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

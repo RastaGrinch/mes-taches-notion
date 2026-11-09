@@ -1,5 +1,7 @@
 # Mes tâches — client de bureau local pour Notion
 
+[![Licence : GPL v3](https://img.shields.io/badge/Licence-GPL%20v3-blue.svg)](LICENSE)
+
 **Mes tâches** est une application de bureau multiplateforme construite avec React, TypeScript, Tauri et Rust. Elle propose une saisie rapide inspirée des applications de tâches natives, tout en synchronisant les données avec une source de données Notion.
 
 L’application fonctionne d’abord en local : les tâches restent accessibles sans connexion et les modifications sont placées dans une file d’attente SQLite jusqu’à la prochaine synchronisation.
@@ -130,3 +132,8 @@ Une compilation croisée Windows depuis macOS est disponible avec `scripts/build
 
 Le projet est en version `0.1.0`. Les installateurs macOS et Windows ne sont pas encore signés par un certificat de distribution public : Gatekeeper ou SmartScreen peuvent afficher un avertissement lors du premier lancement.
 
+## Licence
+
+Le code source et les ressources fournies avec l’application sont distribués sous la licence **GNU General Public License v3.0 uniquement** (`GPL-3.0-only`). Vous pouvez utiliser, étudier, modifier et redistribuer le projet. Toute version modifiée que vous distribuez doit rester sous cette même licence et être accompagnée de son code source.
+
+Consultez le fichier [LICENSE](LICENSE) pour le texte complet de la licence.

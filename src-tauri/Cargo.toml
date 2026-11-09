@@ -3,6 +3,8 @@ name = "notion-tasks-local"
 version = "0.1.0"
 description = "Gestionnaire de tâches local synchronisé avec Notion"
 authors = ["Nicolas"]
+license = "GPL-3.0-only"
+repository = "https://github.com/RastaGrinch/mes-taches-notion"
 edition = "2021"
 
 [lib]
