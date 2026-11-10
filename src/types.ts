@@ -32,6 +32,8 @@ export interface Settings {
   defaultAssignee: string;
   defaultSource: string;
   syncIntervalMinutes: number;
+  sourceOptions: string[];
+  assigneeOptions: string[];
 }
 
 export interface AppStatus {

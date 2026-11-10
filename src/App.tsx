@@ -28,6 +28,8 @@ const initialSettings: Settings = {
   defaultAssignee: "",
   defaultSource: "",
   syncIntervalMinutes: 5,
+  sourceOptions: [],
+  assigneeOptions: [],
 };
 
 const navigation: Array<{ key: ViewKey; label: string; icon: typeof Sun }> = [
@@ -144,6 +146,13 @@ export default function App() {
     try {
       const saved = await backend.saveTask(task);
       updateLocal(saved);
+      const assignee = saved.assignee.trim();
+      if (assignee) {
+        setStatus((current) => {
+          if (!current || current.settings.assigneeOptions.includes(assignee)) return current;
+          return { ...current, settings: { ...current.settings, assigneeOptions: [...current.settings.assigneeOptions, assignee] } };
+        });
+      }
       if (status?.configured) void handleSync();
     } catch (reason) {
       setError(String(reason));
@@ -283,7 +292,7 @@ export default function App() {
         </section>
       </main>
 
-      {selected && <DetailPanel task={selected} onClose={() => setSelected(null)} onSave={handleSave} onComplete={handleComplete} onDelete={() => setDeleteCandidate(selected)} deleteDisabled={syncing} />}
+      {selected && <DetailPanel task={selected} sourceOptions={status.settings.sourceOptions} assigneeOptions={status.settings.assigneeOptions} onClose={() => setSelected(null)} onSave={handleSave} onComplete={handleComplete} onDelete={() => setDeleteCandidate(selected)} deleteDisabled={syncing} />}
       {deleteCandidate && <DeleteDialog task={deleteCandidate} busy={deleting} syncInProgress={syncing} onCancel={() => !deleting && setDeleteCandidate(null)} onConfirm={() => void handleDelete()} />}
       {themeOpen && <ThemePanel activeTheme={currentTheme} onChoose={chooseTheme} onClose={() => setThemeOpen(false)} />}
       {settingsOpen && <SettingsPanel status={status} onClose={() => setSettingsOpen(false)} onSaved={async () => { setSettingsOpen(false); await load(); }} />}
@@ -348,10 +357,78 @@ function TaskRow({ task, onComplete, onSelect, onSave }: { task: Task; onComplet
   );
 }
 
-function DetailPanel({ task, onClose, onSave, onComplete, onDelete, deleteDisabled }: { task: Task; onClose: () => void; onSave: (task: Task) => void; onComplete: (task: Task, done: boolean) => void; onDelete: () => void; deleteDisabled: boolean }) {
+function optionChoices(options: string[], current: string) {
+  const names: string[] = [];
+  for (const option of options) {
+    const name = option.trim();
+    if (name && !names.includes(name)) names.push(name);
+  }
+  if (current && !names.includes(current)) names.unshift(current);
+  return names;
+}
+
+function OptionSelect({ value, options, onChange, allowCreate = false, emptyLabel, createPlaceholder }: { value: string; options: string[]; onChange: (value: string) => void; allowCreate?: boolean; emptyLabel: string; createPlaceholder?: string }) {
+  const [creating, setCreating] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  function commit() {
+    const name = draftName.trim();
+    if (!name) {
+      setCreating(false);
+      setCreateError(null);
+      return;
+    }
+    if (name.includes(",")) {
+      setCreateError("Le nom ne peut pas contenir de virgule.");
+      return;
+    }
+    onChange(name);
+    setDraftName("");
+    setCreateError(null);
+    setCreating(false);
+  }
+
+  if (creating) {
+    return (
+      <>
+        <span className="create-choice">
+          <input autoFocus value={draftName} placeholder={createPlaceholder} aria-label={createPlaceholder} onChange={(event) => { setDraftName(event.target.value); setCreateError(null); }} onKeyDown={(event) => {
+            if (event.key === "Enter") { event.preventDefault(); commit(); }
+            if (event.key === "Escape") { setCreating(false); setDraftName(""); setCreateError(null); }
+          }} />
+          <button type="button" className="secondary-button" onClick={commit}>Ajouter</button>
+        </span>
+        {createError && <small className="field-hint">{createError}</small>}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <select value={value} onChange={(event) => {
+        if (event.target.value === "__create__") { setCreating(true); setDraftName(""); return; }
+        onChange(event.target.value);
+      }}>
+        <option value="">{emptyLabel}</option>
+        {optionChoices(options, value).map((option) => <option key={option} value={option}>{option}</option>)}
+        {allowCreate && <option value="__create__">Ajouter…</option>}
+      </select>
+      {options.length === 0 && <small className="field-hint">Les choix viennent de Notion, après une connexion ou une synchronisation.</small>}
+    </>
+  );
+}
+
+function DetailPanel({ task, sourceOptions, assigneeOptions, onClose, onSave, onComplete, onDelete, deleteDisabled }: { task: Task; sourceOptions: string[]; assigneeOptions: string[]; onClose: () => void; onSave: (task: Task) => void; onComplete: (task: Task, done: boolean) => void; onDelete: () => void; deleteDisabled: boolean }) {
   const [draft, setDraft] = useState(task);
+  const [assignees, setAssignees] = useState(assigneeOptions);
   useEffect(() => setDraft(task), [task]);
+  useEffect(() => setAssignees(assigneeOptions), [assigneeOptions]);
   const update = <K extends keyof Task>(key: K, value: Task[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const updateAssignee = (value: string) => {
+    update("assignee", value);
+    if (value && !assignees.includes(value)) setAssignees((current) => [...current, value]);
+  };
   const saveAndClose = () => { onSave(draft); onClose(); };
   const toggleDone = () => {
     const done = !draft.done;
@@ -372,8 +449,8 @@ function DetailPanel({ task, onClose, onSave, onComplete, onDelete, deleteDisabl
         <Field label="Échéance"><input type="date" value={draft.due ?? ""} onChange={(event) => update("due", event.target.value || null)} /></Field>
         <Field label="Priorité"><select value={draft.priority} onChange={(event) => update("priority", event.target.value as Priority)}><option value="P1 - Urgent & Important">P1 — Urgent et important</option><option value="P2 - Important">P2 — Important</option><option value="P3 - A faire">P3 — À faire</option><option value="P4 - Plus tard">P4 — Plus tard</option></select></Field>
         <Field label="Statut"><select value={draft.status} onChange={(event) => update("status", event.target.value)}><option>A faire</option><option>En cours</option><option>Bloqué</option><option>Terminé</option><option>Abandonnée</option></select></Field>
-        <Field label="Responsable"><input value={draft.assignee} onChange={(event) => update("assignee", event.target.value)} placeholder="Ex. Alice" /></Field>
-        <Field label="Source"><input value={draft.source} onChange={(event) => update("source", event.target.value)} placeholder="Ex. Réunion" /></Field>
+        <Field label="Responsable"><OptionSelect value={draft.assignee} options={assignees} allowCreate emptyLabel="Aucun" createPlaceholder="Nom du responsable" onChange={updateAssignee} /></Field>
+        <Field label="Source"><OptionSelect value={draft.source} options={sourceOptions} emptyLabel="Aucune" onChange={(value) => update("source", value)} /></Field>
         <Field label="Description"><textarea value={draft.description} onChange={(event) => update("description", event.target.value)} rows={5} placeholder="Ajouter des détails…" /></Field>
         <Field label="Commentaire"><textarea value={draft.comment} onChange={(event) => update("comment", event.target.value)} rows={4} /></Field>
       </div>
@@ -446,8 +523,8 @@ function SettingsPanel({ status, onClose, onSaved }: { status: AppStatus; onClos
           <Field label={status.tokenStored ? "Nouveau jeton Notion (laisser vide pour conserver l’actuel)" : "Jeton personnel Notion"}><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="ntn_…" autoComplete="off" /></Field>
           <div className="settings-grid">
             <Field label="Statut par défaut"><input value={settings.defaultStatus} onChange={(event) => setSettings({ ...settings, defaultStatus: event.target.value })} /></Field>
-            <Field label="Responsable par défaut"><input value={settings.defaultAssignee} onChange={(event) => setSettings({ ...settings, defaultAssignee: event.target.value })} /></Field>
-            <Field label="Source par défaut"><input value={settings.defaultSource} onChange={(event) => setSettings({ ...settings, defaultSource: event.target.value })} /></Field>
+            <Field label="Responsable par défaut"><OptionSelect value={settings.defaultAssignee} options={settings.assigneeOptions} allowCreate emptyLabel="Aucun" createPlaceholder="Nom du responsable" onChange={(value) => setSettings({ ...settings, defaultAssignee: value, assigneeOptions: value && !settings.assigneeOptions.includes(value) ? [...settings.assigneeOptions, value] : settings.assigneeOptions })} /></Field>
+            <Field label="Source par défaut"><OptionSelect value={settings.defaultSource} options={settings.sourceOptions} emptyLabel="Aucune" onChange={(value) => setSettings({ ...settings, defaultSource: value })} /></Field>
             <Field label="Synchronisation (minutes)"><input type="number" min={1} max={60} value={settings.syncIntervalMinutes} onChange={(event) => setSettings({ ...settings, syncIntervalMinutes: Number(event.target.value) })} /></Field>
           </div>
           {message && <div className="inline-message">{message}</div>}

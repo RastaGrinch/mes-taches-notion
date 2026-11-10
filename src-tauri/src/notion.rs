@@ -21,7 +21,7 @@ pub struct RemoteWrite {
 impl NotionClient {
     pub fn new(token: String, settings: Settings) -> Result<Self, String> {
         let client = Client::builder()
-            .user_agent("notion-tasks-local/0.2")
+            .user_agent("notion-tasks-local/0.3")
             .build()
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -31,19 +31,11 @@ impl NotionClient {
         })
     }
 
-    pub async fn validate(&self) -> Result<(), String> {
-        let data_source_id = clean_id(&self.settings.data_source_id);
-        let schema_response = self
-            .request(
-                self.client
-                    .get(format!("{NOTION_API}/data_sources/{data_source_id}")),
-            )
-            .send()
-            .await
-            .map_err(network_error)?;
-        let schema = ensure_success(schema_response).await?;
+    pub async fn validate(&self) -> Result<PropertyOptions, String> {
+        let schema = self.fetch_schema().await?;
         validate_schema(&schema)?;
 
+        let data_source_id = clean_id(&self.settings.data_source_id);
         let response = self
             .request(
                 self.client
@@ -53,7 +45,26 @@ impl NotionClient {
             .send()
             .await
             .map_err(network_error)?;
-        ensure_success(response).await.map(|_| ())
+        ensure_success(response).await?;
+        Ok(property_options_from_schema(&schema))
+    }
+
+    pub async fn property_options(&self) -> Result<PropertyOptions, String> {
+        let schema = self.fetch_schema().await?;
+        Ok(property_options_from_schema(&schema))
+    }
+
+    async fn fetch_schema(&self) -> Result<Value, String> {
+        let data_source_id = clean_id(&self.settings.data_source_id);
+        let schema_response = self
+            .request(
+                self.client
+                    .get(format!("{NOTION_API}/data_sources/{data_source_id}")),
+            )
+            .send()
+            .await
+            .map_err(network_error)?;
+        ensure_success(schema_response).await
     }
 
     pub async fn push(&self, task: &Task) -> Result<RemoteWrite, String> {
@@ -152,6 +163,62 @@ impl NotionClient {
             .header("Notion-Version", NOTION_VERSION)
             .header("Content-Type", "application/json")
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyOptions {
+    pub source: Vec<String>,
+    pub assignee: Vec<String>,
+}
+
+fn property_options_from_schema(schema: &Value) -> PropertyOptions {
+    PropertyOptions {
+        source: select_option_names(schema, "Source"),
+        assignee: select_option_names(schema, "Resp."),
+    }
+}
+
+pub fn normalize_select_name(value: &str) -> Result<String, String> {
+    let name = value.trim();
+    if name.contains(',') {
+        return Err("Le nom du responsable ne peut pas contenir de virgule.".into());
+    }
+    Ok(name.to_string())
+}
+
+pub fn merge_option_names(mut remote: Vec<String>, keep: &[String]) -> Vec<String> {
+    for name in keep {
+        let name = name.trim();
+        if name.is_empty() || remote.iter().any(|existing| existing == name) {
+            continue;
+        }
+        remote.push(name.to_string());
+    }
+    remote
+}
+
+fn select_option_names(data_source: &Value, property: &str) -> Vec<String> {
+    let Some(options) = data_source
+        .get("properties")
+        .and_then(|properties| properties.get(property))
+        .and_then(|property| property.get("select"))
+        .and_then(|select| select.get("options"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for option in options {
+        let Some(name) = option.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || names.iter().any(|existing: &String| existing == name) {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    names
 }
 
 fn validate_schema(data_source: &Value) -> Result<(), String> {
@@ -414,6 +481,62 @@ mod tests {
             "Commentaire": { "type": "rich_text" }
         });
         assert!(validate_schema(&json!({ "properties": properties })).is_ok());
+    }
+
+    #[test]
+    fn extracts_source_options_in_notion_order() {
+        let schema = json!({
+            "properties": {
+                "Source": {
+                    "type": "select",
+                    "select": {
+                        "options": [
+                            { "name": "Mail", "color": "blue" },
+                            { "name": "  Réunion  " },
+                            { "name": "" },
+                            { "name": "Mail" },
+                            { "color": "gray" }
+                        ]
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            select_option_names(&schema, "Source"),
+            vec!["Mail".to_string(), "Réunion".to_string()]
+        );
+    }
+
+    #[test]
+    fn reads_source_and_assignee_options() {
+        let schema = json!({
+            "properties": {
+                "Source": { "select": { "options": [{ "name": "Mail" }] } },
+                "Resp.": { "select": { "options": [{ "name": "Alice" }, { "name": "Bob" }] } }
+            }
+        });
+        assert_eq!(
+            property_options_from_schema(&schema),
+            PropertyOptions {
+                source: vec!["Mail".into()],
+                assignee: vec!["Alice".into(), "Bob".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_a_new_assignee_until_notion_returns_it() {
+        let merged = merge_option_names(
+            vec!["Alice".into()],
+            &[" Bob ".into(), "Alice".into(), "".into()],
+        );
+        assert_eq!(merged, vec!["Alice".to_string(), "Bob".to_string()]);
+    }
+
+    #[test]
+    fn rejects_an_assignee_name_containing_a_comma() {
+        assert!(normalize_select_name("Ada, Lovelace").is_err());
+        assert_eq!(normalize_select_name("  Ada  ").unwrap(), "Ada");
     }
 
     #[test]

@@ -69,10 +69,12 @@ fn save_task(mut input: Task, state: State<'_, AppState>) -> Result<Task, String
         return Err("Le titre de la tâche est vide.".into());
     }
     input.title = input.title.trim().to_string();
+    input.assignee = notion::normalize_select_name(&input.assignee)?;
     input.dirty = true;
     input.sync_error = None;
     input.updated_at = Utc::now().to_rfc3339();
     state.db.save_local(&input)?;
+    remember_assignee(&state.db, &input.assignee)?;
     Ok(input)
 }
 
@@ -100,9 +102,47 @@ fn delete_task(id: String, state: State<'_, AppState>) -> Result<usize, String> 
 }
 
 #[tauri::command]
-fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<AppStatus, String> {
+fn save_settings(mut settings: Settings, state: State<'_, AppState>) -> Result<AppStatus, String> {
+    let stored = state.db.settings()?;
+    settings.default_assignee = notion::normalize_select_name(&settings.default_assignee)?;
+    settings.source_options = stored.source_options;
+    settings.assignee_options = notion::merge_option_names(
+        stored.assignee_options,
+        &[settings.default_assignee.clone()],
+    );
     state.db.save_settings(&settings)?;
     build_status(&state.db)
+}
+
+fn store_property_options(
+    db: &Database,
+    options: notion::PropertyOptions,
+    keep_assignees: &[String],
+) -> Result<(), String> {
+    let mut current = db.settings()?;
+    let mut keep = vec![current.default_assignee.clone()];
+    keep.extend(keep_assignees.iter().cloned());
+    let assignee_options = notion::merge_option_names(options.assignee, &keep);
+    if current.source_options == options.source && current.assignee_options == assignee_options {
+        return Ok(());
+    }
+    current.source_options = options.source;
+    current.assignee_options = assignee_options;
+    db.save_settings(&current)
+}
+
+fn remember_assignee(db: &Database, name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Ok(());
+    }
+    let mut settings = db.settings()?;
+    let assignee_options =
+        notion::merge_option_names(settings.assignee_options.clone(), &[name.to_string()]);
+    if assignee_options == settings.assignee_options {
+        return Ok(());
+    }
+    settings.assignee_options = assignee_options;
+    db.save_settings(&settings)
 }
 
 #[tauri::command]
@@ -117,13 +157,18 @@ async fn connect_notion(
         return Err("L’identifiant de la source de données est vide.".into());
     }
     let client = NotionClient::new(input.token.trim().to_string(), input.settings.clone())?;
-    client.validate().await?;
+    let options = client.validate().await?;
+    let mut settings = input.settings;
+    settings.default_assignee = notion::normalize_select_name(&settings.default_assignee)?;
+    settings.source_options = options.source;
+    settings.assignee_options =
+        notion::merge_option_names(options.assignee, &[settings.default_assignee.clone()]);
     token_entry()?
         .set_password(input.token.trim())
         .map_err(|error| {
             format!("Impossible d’enregistrer le jeton dans le coffre système : {error}")
         })?;
-    state.db.save_settings(&input.settings)?;
+    state.db.save_settings(&settings)?;
     build_status(&state.db)
 }
 
@@ -141,6 +186,7 @@ async fn sync_now(state: State<'_, AppState>) -> Result<SyncResult, String> {
     let settings = state.db.settings()?;
     let client = NotionClient::new(token, settings)?;
     let dirty = state.db.dirty_tasks()?;
+    let keep_assignees: Vec<String> = dirty.iter().map(|task| task.assignee.clone()).collect();
     let mut pushed = 0;
     let mut failed = 0;
     for (task_id, notion_id) in state.db.pending_deletions()? {
@@ -183,6 +229,9 @@ async fn sync_now(state: State<'_, AppState>) -> Result<SyncResult, String> {
         }
         Err(error) if pushed == 0 && failed == 0 => return Err(error),
         Err(_) => failed += 1,
+    }
+    if let Ok(options) = client.property_options().await {
+        store_property_options(&state.db, options, &keep_assignees)?;
     }
     let pending = state.db.pending_count()?;
     let message = if failed == 0 {

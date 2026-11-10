@@ -56,6 +56,12 @@ pub struct Settings {
     pub default_assignee: String,
     pub default_source: String,
     pub sync_interval_minutes: u32,
+    /// Options de la propriété Notion `Source`, dans l’ordre de la liste déroulante.
+    #[serde(default)]
+    pub source_options: Vec<String>,
+    /// Options de la propriété Notion `Resp.`, dans l’ordre de la liste déroulante.
+    #[serde(default)]
+    pub assignee_options: Vec<String>,
 }
 
 impl Default for Settings {
@@ -67,6 +73,8 @@ impl Default for Settings {
             default_assignee: String::new(),
             default_source: String::new(),
             sync_interval_minutes: 5,
+            source_options: Vec::new(),
+            assignee_options: Vec::new(),
         }
     }
 }

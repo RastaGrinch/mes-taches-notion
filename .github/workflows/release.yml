@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+          - os: macos-latest
+            bundles: app
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Installer les dépendances JavaScript
+        run: npm ci
+
+      - name: Compiler l’application
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+
+      - name: Préparer l’installateur Windows
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "Installateur Windows introuvable." }
+          Copy-Item $setup.FullName "$env:GITHUB_WORKSPACE/Mes-taches-Windows-x64-setup.exe"
+          $hash = (Get-FileHash "$env:GITHUB_WORKSPACE/Mes-taches-Windows-x64-setup.exe" -Algorithm SHA256).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$env:GITHUB_WORKSPACE/windows-sha.txt", "$hash  Mes-taches-Windows-x64-setup.exe$([Environment]::NewLine)")
+
+      - name: Préparer l’application macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          ditto -c -k --keepParent "src-tauri/target/release/bundle/macos/Mes tâches.app" "$GITHUB_WORKSPACE/Mes-taches-macOS.zip"
+          shasum -a 256 "$GITHUB_WORKSPACE/Mes-taches-macOS.zip" | awk '{print tolower($1) "  Mes-taches-macOS.zip"}' > "$GITHUB_WORKSPACE/macos-sha.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-latest'
+        with:
+          name: windows
+          path: |
+            Mes-taches-Windows-x64-setup.exe
+            windows-sha.txt
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'macos-latest'
+        with:
+          name: macos
+          path: |
+            Mes-taches-macOS.zip
+            macos-sha.txt
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+
+      - name: Assembler les fichiers de la release
+        run: |
+          mkdir -p release
+          mv dist-release/windows/Mes-taches-Windows-x64-setup.exe release/
+          mv dist-release/macos/Mes-taches-macOS.zip release/
+          cat dist-release/macos/macos-sha.txt dist-release/windows/windows-sha.txt > release/SHA256SUMS.txt
+          cp LICENSE release/LICENSE
+
+      - name: Publier la release GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: |
+            Cette version aligne les champs **Source** et **Responsable** sur les listes déroulantes Notion.
+
+            ### Nouveautés
+
+            - le champ **Source** reprend les options de la propriété Notion et se met à jour à chaque synchronisation ;
+            - le champ **Responsable** reprend les options de la propriété `Resp.` ;
+            - un responsable absent de la liste peut être ajouté : Notion crée l’option à la synchronisation suivante ;
+            - le responsable par défaut utilise la même liste.
+
+            ### Téléchargements
+
+            - `Mes-taches-macOS.zip` : application macOS Apple Silicon ;
+            - `Mes-taches-Windows-x64-setup.exe` : installateur Windows x64 ;
+            - `SHA256SUMS.txt` : empreintes SHA-256 des deux binaires ;
+            - `LICENSE` : licence GNU GPL v3.
+
+            ### Autoriser l’application sur macOS
+
+            Après avoir décompressé l’archive et déplacé **Mes tâches.app** dans **Applications**, exécuter dans le Terminal :
+
+            ```bash
+            xattr -dr com.apple.quarantine "/Applications/Mes tâches.app"
+            open "/Applications/Mes tâches.app"
+            ```
+
+            En cas de refus lié aux droits :
+
+            ```bash
+            sudo xattr -dr com.apple.quarantine "/Applications/Mes tâches.app"
+            ```
+
+            Les binaires ne sont pas encore signés avec un certificat de distribution public.
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > release/NOTES.md
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Mes tâches ${GITHUB_REF_NAME#v}" \
+            --notes-file release/NOTES.md \
+            release/Mes-taches-Windows-x64-setup.exe \
+            release/Mes-taches-macOS.zip \
+            release/SHA256SUMS.txt \
+            release/LICENSE

@@ -1,7 +1,7 @@
 {
   "name": "notion-tasks-local",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Gestionnaire de tâches local synchronisé avec Notion",
   "license": "GPL-3.0-only",
   "repository": {

@@ -158,7 +158,7 @@ Une compilation croisée Windows depuis macOS est disponible avec `scripts/build
 
 ## État du projet
 
-Le projet est en version `0.2.0`. Les installateurs macOS et Windows ne sont pas encore signés par un certificat de distribution public : Gatekeeper ou SmartScreen peuvent afficher un avertissement lors du premier lancement.
+Le projet est en version `0.3.0`. Les installateurs macOS et Windows ne sont pas encore signés par un certificat de distribution public : Gatekeeper ou SmartScreen peuvent afficher un avertissement lors du premier lancement.
 
 ## Licence
 
